@@ -6,6 +6,6 @@ Some features I've finished are: visualization of messages sent over time, visua
 
 Download this Jupyter Notebook to analyze your own Discord conversation CSV.
 
-# Useful Things
+## Useful Things
 - [Awesome tool I used to download my Discord conversation as a CSV File](https://github.com/Tyrrrz/DiscordChatExporter)
 - [Cool Article about Clustering text](https://towardsdatascience.com/a-friendly-introduction-to-text-clustering-fa996bcefd04)
