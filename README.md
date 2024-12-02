@@ -1,6 +1,6 @@
 # Discord Analyzer Tool
 
-This is a project I created to analyze my best friend and I's Discord conversation history over the past 6 years and get the hang of basic data science tools. I used pandas to clean my data and find trends, matplotlib to visualize trends, NTLK to tokenize and preprocess text, and scikit-learn (K-Means, TF-idf) to get started with clustering similar messages. 
+This is a personal project I created to analyze my best friend and I's Discord conversation history over the past 6 years and get the hang of basic data science tools. I used pandas to clean my data and find trends, matplotlib to visualize trends, NTLK to tokenize and preprocess text, and scikit-learn (K-Means, TF-idf) to get started with clustering similar messages. 
 
 **Finished Features**
 - Visualization of messages sent over time
