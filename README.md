@@ -22,16 +22,16 @@ You can download this Jupyter Notebook and edit wherever there are comments to a
    cd discord-analyzer-tool
    ```
 2. **Install Dependencies**
-   Install the required Python libraries using the `requirements.txt` file:
+Install the required Python libraries using the `requirements.txt` file:
    ```
    pip install -r requirements.txt
    ```
 
-3. **Download Your Discord Conversation**
-   I used this [repository to download my Discord conversation as a CSV File](https://github.com/Tyrrrz/DiscordChatExporter).
+4. **Download Your Discord Conversation**
+I used this [repository to download my Discord conversation as a CSV File](https://github.com/Tyrrrz/DiscordChatExporter).
 
-4. **Open the Jupyter Notebook**
-   Start the Jupyter Notebook server and open `discordalyzer.ipynb`. From there you can edit commented cells with information pertaining to your data:
+6. **Open the Jupyter Notebook**
+Start the Jupyter Notebook server and open `discordalyzer.ipynb`. From there you can edit commented cells with information pertaining to your data:
    ```
    jupyter notebook discordalyzer.ipynb
    ```
