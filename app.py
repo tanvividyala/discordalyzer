@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import json
+import re  # Add this import for the iMessage TXT parser
 
 # Page configuration
 st.set_page_config(
@@ -30,12 +31,166 @@ api_key_input = st.sidebar.text_input(
 if api_key_input:
     st.sidebar.success("✅ API key provided - summaries unlocked!")
 else:
-    st.sidebar.info("💡 Add an API key to enable AI-powered daily summaries")
+    st.sidebar.info("💡 Enter API key")
 
 st.sidebar.markdown("---")
 
+# Update the iMessage TXT parser function to properly handle clumped messages
+def parse_imessage_txt(file_bytes):
+    import re
+    import pandas as pd
+
+    text = file_bytes.decode("utf-8", errors="ignore")
+    lines = text.split('\n')
+    
+    messages = []
+    i = 0
+    
+    # Full timestamp pattern (like "Oct 08, 2024 11:08:46 AM")
+    timestamp_pattern = re.compile(
+        r'^([A-Z][a-z]{2} \d{1,2}, \d{4}\s+\d{1,2}:\d{2}:\d{2} [AP]M)'
+    )
+    
+    # Pattern for file attachments
+    attachment_pattern = re.compile(r'/Users/.+?\.(HEIC|heic|jpg|jpeg|png|gif|mp4|mov|pdf|txt|m4a)')
+    
+    # Pattern for reactions
+    reaction_pattern = re.compile(r'^Reacted .+ to')
+    
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check if this line is a timestamp (start of a message)
+        timestamp_match = timestamp_pattern.match(line)
+        
+        if timestamp_match:
+            # Extract the timestamp
+            timestamp_str = timestamp_match.group(1)
+            
+            # Remove read receipt info from timestamp if present
+            timestamp_str = re.sub(r'\s*\(Read by .+?\)', '', timestamp_str)
+            
+            try:
+                timestamp = pd.to_datetime(timestamp_str, format="%b %d, %Y %I:%M:%S %p")
+            except:
+                i += 1
+                continue
+            
+            i += 1
+            
+            # Next non-empty line should be the sender
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            
+            if i >= len(lines):
+                break
+            
+            # Get the sender line
+            sender_line = lines[i].strip()
+            
+            # Skip if this looks like it's actually content (starts with common content markers)
+            if sender_line.startswith('-') or \
+               sender_line.startswith('Edited ') or \
+               timestamp_pattern.match(sender_line):
+                # This isn't actually a sender, skip this message
+                i += 1
+                continue
+            
+            sender = sender_line
+            i += 1
+            
+            # Now collect the message content
+            content_lines = []
+            
+            while i < len(lines):
+                current_line = lines[i]
+                
+                # Stop if we hit a new timestamp at the start of a line (not indented)
+                if timestamp_pattern.match(current_line) and not current_line.startswith(' '):
+                    break
+                
+                stripped_line = current_line.strip()
+                
+                # Skip empty lines
+                if not stripped_line:
+                    i += 1
+                    continue
+                
+                # Skip read receipts
+                if stripped_line.startswith('(Read by'):
+                    i += 1
+                    continue
+                
+                # Skip "This message responded to an earlier message."
+                if stripped_line == "This message responded to an earlier message.":
+                    i += 1
+                    continue
+                
+                # Skip reactions
+                if reaction_pattern.match(stripped_line):
+                    i += 1
+                    continue
+                
+                # Skip tapbacks/reactions section
+                if stripped_line == "Tapbacks:" or \
+                   stripped_line.startswith("Loved by") or \
+                   stripped_line.startswith("Liked by") or \
+                   stripped_line.startswith("Emphasized by") or \
+                   stripped_line.startswith("Laughed at by") or \
+                   stripped_line.startswith("Questioned by") or \
+                   stripped_line.startswith("Disliked by"):
+                    i += 1
+                    continue
+                
+                # Skip "Edited X later:" lines (these are duplicate content)
+                if stripped_line.startswith("Edited ") and " later:" in stripped_line:
+                    i += 1
+                    continue
+                
+                # Skip file attachments
+                if attachment_pattern.search(stripped_line):
+                    i += 1
+                    continue
+                
+                # If the line is indented with 4+ spaces/tabs, it's a nested duplicate message
+                if current_line.startswith('    ') or current_line.startswith('\t'):
+                    i += 1
+                    continue
+                
+                # Check if this line contains a timestamp in it (like "Mar 09, 2025 12:57:37 AM ok hangout review:")
+                # If so, extract just the content after the timestamp
+                timestamp_in_content = timestamp_pattern.search(stripped_line)
+                if timestamp_in_content:
+                    # Extract content after the timestamp
+                    content_after_timestamp = stripped_line[timestamp_in_content.end():].strip()
+                    if content_after_timestamp:
+                        content_lines.append(content_after_timestamp)
+                    i += 1
+                    continue
+                
+                # This is actual content - add it
+                content_lines.append(stripped_line)
+                i += 1
+            
+            # Join content and add message if it has content
+            content = ' '.join(content_lines).strip()
+            
+            if content:
+                messages.append({
+                    "timestamp": timestamp,
+                    "sender": sender,
+                    "content": content
+                })
+        else:
+            i += 1
+    
+    return pd.DataFrame(messages)
+
 # File upload section
-uploaded_file = st.sidebar.file_uploader("Upload your conversation file", type=['csv', 'json'])
+uploaded_file = st.sidebar.file_uploader(
+    "Upload your conversation file",
+    type=['csv', 'json', 'txt']
+)
 
 if uploaded_file is not None:
     # Read the file based on type
@@ -43,23 +198,113 @@ if uploaded_file is not None:
     
     try:
         if file_type == 'json':
-            # Read JSON and convert to DataFrame
-            json_data = json.load(uploaded_file)
+            # Read JSON with proper encoding handling
+            uploaded_file.seek(0)
+            raw_data = uploaded_file.read()
+            
+            # Fix Instagram's encoding issue (Latin-1 encoded as UTF-8)
+            try:
+                json_str = raw_data.decode('utf-8')
+                json_data = json.loads(json_str)
+                
+                # Fix encoding for Instagram exports
+                def fix_instagram_encoding(obj):
+                    if isinstance(obj, str):
+                        # Instagram encodes UTF-8 as Latin-1, so we need to reverse it
+                        try:
+                            return obj.encode('latin1').decode('utf-8')
+                        except:
+                            return obj
+                    elif isinstance(obj, dict):
+                        return {k: fix_instagram_encoding(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [fix_instagram_encoding(item) for item in obj]
+                    return obj
+                
+                json_data = fix_instagram_encoding(json_data)
+                
+            except Exception as e:
+                st.error(f"⚠️ Error parsing JSON: {str(e)}")
+                st.stop()
             
             # Handle different JSON structures
             if isinstance(json_data, list):
                 data = pd.DataFrame(json_data)
             elif isinstance(json_data, dict):
-                # Try to find the messages array in the JSON
+                # Check for Instagram format
                 if 'messages' in json_data:
-                    data = pd.DataFrame(json_data['messages'])
+                    messages = json_data['messages']
+                    
+                    # Check if this is the new Google Chat format
+                    if messages and isinstance(messages[0], dict) and 'creator' in messages[0]:
+                        # Google Chat / Hangouts format
+                        formatted_messages = []
+                        for msg in messages:
+                            # Skip messages without text
+                            if 'text' not in msg or not msg['text']:
+                                continue
+                            
+                            # Extract creator name from nested object
+                            creator_name = 'Unknown'
+                            if 'creator' in msg and isinstance(msg['creator'], dict):
+                                creator_name = msg['creator'].get('name', 'Unknown')
+                            
+                            # Parse the date string
+                            date_str = msg.get('created_date', '')
+                            try:
+                                # Parse format like "Saturday, June 9, 2018 at 11:42:22 PM UTC"
+                                # Remove the day of week and "at" for easier parsing
+                                date_str_clean = date_str.split(', ', 1)[-1].replace(' at ', ' ').replace(' UTC', '')
+                                timestamp = pd.to_datetime(date_str_clean, format='%B %d, %Y %I:%M:%S %p')
+                            except:
+                                timestamp = pd.NaT
+                        
+                            formatted_msg = {
+                                'sender_name': creator_name,
+                                'timestamp': timestamp,
+                                'content': msg.get('text', '')
+                            }
+                            formatted_messages.append(formatted_msg)
+                        
+                        data = pd.DataFrame(formatted_messages)
+                        st.sidebar.success("✅ JSON loaded and converted!")
+                        
+                    elif messages and isinstance(messages[0], dict) and 'sender_name' in messages[0]:
+                        # Instagram format
+                        formatted_messages = []
+                        for msg in messages:
+                            # Skip messages without content
+                            if 'content' not in msg:
+                                continue
+                            
+                            formatted_msg = {
+                                'sender_name': msg.get('sender_name', 'Unknown'),
+                                'timestamp_ms': msg.get('timestamp_ms', 0),
+                                'content': msg.get('content', '')
+                            }
+                            formatted_messages.append(formatted_msg)
+                        
+                        data = pd.DataFrame(formatted_messages)
+                        
+                        # Convert timestamp from milliseconds to datetime
+                        if 'timestamp_ms' in data.columns:
+                            data['timestamp'] = pd.to_datetime(data['timestamp_ms'], unit='ms', utc=True)
+                        
+                        st.sidebar.success("✅ JSON loaded and converted!")
+                    else:
+                        st.error("⚠️ Couldn't parse this messages format.")
+                        st.stop()
                 else:
                     data = pd.DataFrame([json_data])
+                    st.sidebar.success("✅ JSON file loaded and converted!")
             else:
                 st.error("⚠️ Couldn't parse this JSON format. Try converting it to CSV first.")
                 st.stop()
             
-            st.sidebar.success("✅ JSON file loaded and converted!")
+        elif file_type == 'txt':
+            uploaded_file.seek(0)
+            data = parse_imessage_txt(uploaded_file.read())
+            st.sidebar.success("✅ TXT file parsed!")
         else:
             # Read CSV
             data = pd.read_csv(uploaded_file)
@@ -74,9 +319,34 @@ if uploaded_file is not None:
     
     columns = data.columns.tolist()
     
-    date_col = st.sidebar.selectbox("Date/Timestamp Column", columns, index=0)
-    author_col = st.sidebar.selectbox("Author/Username Column", columns, index=1 if len(columns) > 1 else 0)
-    content_col = st.sidebar.selectbox("Message Content Column", columns, index=2 if len(columns) > 2 else 0)
+    # Smart defaults for different platforms
+    date_default = 0
+    author_default = 1 if len(columns) > 1 else 0
+    content_default = 2 if len(columns) > 2 else 0
+    
+    # Discord format (Date, Author, Content)
+    if 'Date' in columns:
+        date_default = columns.index('Date')
+    if 'Author' in columns:
+        author_default = columns.index('Author')
+    if 'Content' in columns:
+        content_default = columns.index('Content')
+    
+    # Instagram format
+    if 'timestamp' in columns:
+        date_default = columns.index('timestamp')
+    if 'sender_name' in columns:
+        author_default = columns.index('sender_name')
+    if 'content' in columns:
+        content_default = columns.index('content')
+    
+    # iMessage format
+    if 'sender' in columns:
+        author_default = columns.index('sender')
+    
+    date_col = st.sidebar.selectbox("Date/Timestamp Column", columns, index=date_default)
+    author_col = st.sidebar.selectbox("Author/Username Column", columns, index=author_default)
+    content_col = st.sidebar.selectbox("Message Content Column", columns, index=content_default)
     
     # Get all unique authors
     unique_authors = sorted(data[author_col].unique())
@@ -133,6 +403,85 @@ if uploaded_file is not None:
         date_range = (data[date_col].max() - data[date_col].min()).days
         st.metric("Days of Conversation", date_range)
     
+    st.markdown("---")
+    
+    # =========================
+    # 📅 VIEW MESSAGES BY DATE RANGE (UPDATED SECTION)
+    # =========================
+    st.header("📅 View Messages by Date Range")
+    st.markdown("Browse raw messages for any date range before diving into analysis.")
+
+    # Date range selector
+    min_date = data[date_col].dt.date.min()
+    max_date = data[date_col].dt.date.max()
+
+    selected_date_range = st.date_input(
+        "Select a date range",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
+        key="date_range_view"
+    )
+
+    # Filter data based on the selected date range
+    if len(selected_date_range) == 2:
+        start_date, end_date = selected_date_range
+        start_dt = pd.Timestamp(start_date).tz_localize("UTC")
+        end_dt = pd.Timestamp(end_date).tz_localize("UTC") + pd.Timedelta(days=1)
+
+        range_data = data[
+            (data[date_col] >= start_dt) &
+            (data[date_col] < end_dt)
+        ].copy()
+
+        # Controls
+        col_ctrl1, col_ctrl2 = st.columns([1, 2])
+
+        with col_ctrl1:
+            author_filter = st.multiselect(
+                "Filter by author",
+                selected_authors,
+                default=selected_authors
+            )
+
+        with col_ctrl2:
+            search_query = st.text_input(
+                "Search messages",
+                placeholder="Type to search…"
+            )
+
+        if author_filter:
+            range_data = range_data[range_data[author_col].isin(author_filter)]
+
+        if search_query:
+            range_data = range_data[
+                range_data[content_col]
+                .astype(str)
+                .str.contains(search_query, case=False, na=False)
+            ]
+
+        if range_data.empty:
+            st.info("No messages found for this date range/filter.")
+        else:
+            range_data["Time"] = range_data[date_col].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            display_df = range_data[
+                ["Time", author_col, content_col]
+            ].rename(columns={
+                author_col: "Author",
+                content_col: "Message"
+            })
+
+            st.caption(f"{len(display_df)} messages shown")
+
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                height=400
+            )
+    else:
+        st.warning("Please select a valid date range.")
+
     st.markdown("---")
     
     # Section 1: Messages Over Time
@@ -270,7 +619,7 @@ if uploaded_file is not None:
     st.markdown("---")
     
     # Section 3: Sentiment Analysis
-    st.header("😊 Conversation Vibes")
+    st.header("😊 Conversation Sentiment")
     st.markdown("See how positive or negative your conversations have been over time")
     
     try:
@@ -284,142 +633,152 @@ if uploaded_file is not None:
         # Initialize VADER
         analyzer = SentimentIntensityAnalyzer()
         
-        # Calculate sentiment for all messages
-        with st.spinner("🔍 Analyzing sentiment... This might take a moment for large conversations."):
-            def get_sentiment(text):
-                if pd.isna(text):
-                    return 0
-                scores = analyzer.polarity_scores(str(text))
-                return scores['compound']  # Returns score from -1 (negative) to 1 (positive)
-            
-            # Only calculate if not already done
-            if 'sentiment' not in data.columns:
-                data['sentiment'] = data[content_col].apply(get_sentiment)
-        
+        # Create tabs for sentiment views
         tab1, tab2 = st.tabs(["📅 Sentiment Calendar", "📈 Sentiment Trends"])
         
         with tab1:
-            st.markdown("### Your conversation vibes, visualized as a calendar")
-            st.markdown("Green = positive vibes, Red = negative vibes, Yellow = neutral")
+            # Calculate sentiment for all messages
+            with st.spinner("🔍 Analyzing sentiment... This might take a moment for large conversations."):
+                def get_sentiment(text):
+                    if pd.isna(text):
+                        return 0
+                    scores = analyzer.polarity_scores(str(text))
+                    return scores['compound']  # Returns score from -1 (negative) to 1 (positive)
+                
+                # Only calculate if not already done
+                if 'sentiment' not in data.columns:
+                    data['sentiment'] = data[content_col].apply(get_sentiment)
             
-            # Calculate daily average sentiment
-            daily_sentiment = data.groupby(data[date_col].dt.date)['sentiment'].mean()
-            
-            # Create a DataFrame for the heatmap
-            sentiment_df = pd.DataFrame({
-                'date': daily_sentiment.index,
-                'sentiment': daily_sentiment.values
-            })
-            
-            # Add year, month, day columns for better organization
-            sentiment_df['year'] = pd.to_datetime(sentiment_df['date']).dt.year
-            sentiment_df['month'] = pd.to_datetime(sentiment_df['date']).dt.month
-            sentiment_df['day'] = pd.to_datetime(sentiment_df['date']).dt.day
-            sentiment_df['weekday'] = pd.to_datetime(sentiment_df['date']).dt.dayofweek
-            sentiment_df['week'] = pd.to_datetime(sentiment_df['date']).dt.isocalendar().week
-            
-            # Year selector
-            available_years = sorted(sentiment_df['year'].unique(), reverse=True)
-            selected_year = st.selectbox("Select year", available_years, key="sentiment_year")
-            
-            # Filter to selected year
-            year_data = sentiment_df[sentiment_df['year'] == selected_year].copy()
-            
-            if len(year_data) > 0:
-                # Create calendar-style heatmap with actual dates
-                # Organize by week and weekday
-                calendar_data = year_data.pivot_table(
-                    values='sentiment',
-                    index='weekday',
-                    columns='week',
-                    aggfunc='mean'
-                )
-                
-                # Create a hover text matrix with actual dates
-                hover_text = []
-                for weekday in range(7):
-                    hover_row = []
-                    for week in calendar_data.columns:
-                        # Find the actual date for this week/weekday combination
-                        matching_dates = year_data[(year_data['week'] == week) & (year_data['weekday'] == weekday)]
-                        if len(matching_dates) > 0:
-                            date_str = matching_dates.iloc[0]['date'].strftime('%B %d, %Y')
-                            sentiment_val = matching_dates.iloc[0]['sentiment']
-                            hover_row.append(f"{date_str}<br>Sentiment: {sentiment_val:.2f}")
-                        else:
-                            hover_row.append("")
-                    hover_text.append(hover_row)
-                
-                # Create custom colorscale (red -> yellow -> green)
-                fig_calendar = go.Figure(data=go.Heatmap(
-                    z=calendar_data.values,
-                    x=calendar_data.columns,
-                    y=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                    text=hover_text,
-                    hovertemplate='%{text}<extra></extra>',
-                    colorscale=[
-                        [0, '#FF4444'],      # Negative - Red
-                        [0.5, '#FFD700'],    # Neutral - Gold
-                        [1, '#43B581']       # Positive - Green
-                    ],
-                    zmid=0,
-                    colorbar=dict(
-                        title="Sentiment",
-                        tickvals=[-1, -0.5, 0, 0.5, 1],
-                        ticktext=['Very Negative', 'Negative', 'Neutral', 'Positive', 'Very Positive']
-                    )
-                ))
-                
-                fig_calendar.update_layout(
-                    title=f'Sentiment Calendar - {selected_year}',
-                    xaxis_title='Week of Year',
-                    yaxis_title='Day of Week',
-                    height=400,
-                    template='plotly_white'
-                )
-                
-                st.plotly_chart(fig_calendar, use_container_width=True)
-                
-                # Show some stats
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    avg_sentiment = year_data['sentiment'].mean()
-                    st.metric("Average Sentiment", f"{avg_sentiment:.2f}")
-                
-                with col2:
-                    positive_days = len(year_data[year_data['sentiment'] > 0.05])
-                    st.metric("Positive Days", positive_days)
-                
-                with col3:
-                    negative_days = len(year_data[year_data['sentiment'] < -0.05])
-                    st.metric("Negative Days", negative_days)
-                
-                with col4:
-                    best_day = year_data.loc[year_data['sentiment'].idxmax(), 'date']
-                    st.metric("Best Day", best_day.strftime('%b %d'))
-                
-                # Show most positive and negative days
-                with st.expander("🔍 See specific days"):
-                    col_pos, col_neg = st.columns(2)
-                    
-                    with col_pos:
-                        st.markdown("**Most Positive Days:**")
-                        top_positive = year_data.nlargest(5, 'sentiment')[['date', 'sentiment']]
-                        for _, row in top_positive.iterrows():
-                            st.write(f"• {row['date'].strftime('%B %d')}: {row['sentiment']:.2f}")
-                    
-                    with col_neg:
-                        st.markdown("**Most Negative Days:**")
-                        top_negative = year_data.nsmallest(5, 'sentiment')[['date', 'sentiment']]
-                        for _, row in top_negative.iterrows():
-                            st.write(f"• {row['date'].strftime('%B %d')}: {row['sentiment']:.2f}")
+            # Add a slider to set the minimum message threshold
+            st.markdown("### Filter Out Outliers")
+            min_messages = st.slider(
+                "Minimum number of messages per day to include in sentiment analysis",
+                min_value=1,
+                max_value=20,
+                value=5,
+                step=1
+            )
+        
+            # Calculate daily average sentiment and filter by the threshold
+            daily_sentiment = data.groupby(data[date_col].dt.date).agg(
+                avg_sentiment=('sentiment', 'mean'),
+                message_count=('sentiment', 'count')
+            )
+            daily_sentiment = daily_sentiment[daily_sentiment['message_count'] >= min_messages]
+        
+            if daily_sentiment.empty:
+                st.info("No days meet the minimum message threshold. Try lowering the threshold.")
             else:
-                st.info(f"No data available for {selected_year}")
+                # Create a DataFrame for the heatmap
+                sentiment_df = daily_sentiment.reset_index().rename(columns={date_col: 'date'})
+                sentiment_df['year'] = pd.to_datetime(sentiment_df['date']).dt.year
+                sentiment_df['month'] = pd.to_datetime(sentiment_df['date']).dt.month
+                sentiment_df['day'] = pd.to_datetime(sentiment_df['date']).dt.day
+                sentiment_df['weekday'] = pd.to_datetime(sentiment_df['date']).dt.dayofweek
+                sentiment_df['week'] = pd.to_datetime(sentiment_df['date']).dt.isocalendar().week
+        
+                # Year selector
+                available_years = sorted(sentiment_df['year'].unique(), reverse=True)
+                selected_year = st.selectbox("Select year", available_years, key="sentiment_year")
+        
+                # Filter to selected year
+                year_data = sentiment_df[sentiment_df['year'] == selected_year].copy()
+        
+                if len(year_data) > 0:
+                    # Create calendar-style heatmap with actual dates
+                    # Organize by week and weekday
+                    calendar_data = year_data.pivot_table(
+                        values='avg_sentiment',
+                        index='weekday',
+                        columns='week',
+                        aggfunc='mean'
+                    )
+                    
+                    # Create a hover text matrix with actual dates
+                    hover_text = []
+                    for weekday in range(7):
+                        hover_row = []
+                        for week in calendar_data.columns:
+                            # Find the actual date for this week/weekday combination
+                            matching_dates = year_data[(year_data['week'] == week) & (year_data['weekday'] == weekday)]
+                            if len(matching_dates) > 0:
+                                date_str = matching_dates.iloc[0]['date'].strftime('%B %d, %Y')
+                                sentiment_val = matching_dates.iloc[0]['avg_sentiment']
+                                hover_row.append(f"{date_str}<br>Sentiment: {sentiment_val:.2f}")
+                            else:
+                                hover_row.append("")
+                        hover_text.append(hover_row)
+        
+                    # Create custom colorscale (red -> yellow -> green)
+                    fig_calendar = go.Figure(data=go.Heatmap(
+                        z=calendar_data.values,
+                        x=calendar_data.columns,
+                        y=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                        text=hover_text,
+                        hovertemplate='%{text}<extra></extra>',
+                        colorscale=[
+                            [0, '#FF4444'],      # Negative - Red
+                            [0.5, '#FFD700'],    # Neutral - Gold
+                            [1, '#43B581']       # Positive - Green
+                        ],
+                        zmid=0,
+                        colorbar=dict(
+                            title="Sentiment",
+                            tickvals=[-1, -0.5, 0, 0.5, 1],
+                            ticktext=['Very Negative', 'Negative', 'Neutral', 'Positive', 'Very Positive']
+                        )
+                    ))
+                    
+                    fig_calendar.update_layout(
+                        title=f'Sentiment Calendar - {selected_year}',
+                        xaxis_title='Week of Year',
+                        yaxis_title='Day of Week',
+                        height=400,
+                        template='plotly_white'
+                    )
+                    
+                    st.plotly_chart(fig_calendar, use_container_width=True)
+                    
+                    # Show some stats
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        avg_sentiment = year_data['avg_sentiment'].mean()
+                        st.metric("Average Sentiment", f"{avg_sentiment:.2f}")
+                    
+                    with col2:
+                        positive_days = len(year_data[year_data['avg_sentiment'] > 0.05])
+                        st.metric("Positive Days", positive_days)
+                    
+                    with col3:
+                        negative_days = len(year_data[year_data['avg_sentiment'] < -0.05])
+                        st.metric("Negative Days", negative_days)
+                    
+                    with col4:
+                        best_day = year_data.loc[year_data['avg_sentiment'].idxmax(), 'date']
+                        st.metric("Best Day", best_day.strftime('%b %d'))
+                    
+                    # Show most positive and negative days
+                    with st.expander("🔍 See specific days"):
+                        col_pos, col_neg = st.columns(2)
+                        
+                        with col_pos:
+                            st.markdown("**Most Positive Days:**")
+                            top_positive = year_data.nlargest(5, 'avg_sentiment')[['date', 'avg_sentiment']]
+                            for _, row in top_positive.iterrows():
+                                st.write(f"• {row['date'].strftime('%B %d')}: {row['avg_sentiment']:.2f}")
+                        
+                        with col_neg:
+                            st.markdown("**Most Negative Days:**")
+                            top_negative = year_data.nsmallest(5, 'avg_sentiment')[['date', 'avg_sentiment']]
+                            for _, row in top_negative.iterrows():
+                                st.write(f"• {row['date'].strftime('%B %d')}: {row['avg_sentiment']:.2f}")
+                else:
+                    st.info(f"No data available for {selected_year}")
         
         with tab2:
             st.markdown("### Track sentiment over time")
-            st.markdown("See how the overall vibe of your conversations has changed")
+            st.markdown("See how the overall sentiment of your conversations has changed")
             
             col1, col2 = st.columns([1, 3])
             
@@ -537,7 +896,7 @@ if uploaded_file is not None:
                     
                     positive_pct = (filtered_sent['sentiment'] > 0.05).sum() / len(filtered_sent) * 100
                     negative_pct = (filtered_sent['sentiment'] < -0.05).sum() / len(filtered_sent) * 100
-                    neutral_pct = 100 - positive_pct - negative_pct
+                    neutral_pct = 100 - positive_pct - negative_pct;
                     
                     with col_stat1:
                         st.metric("Positive Messages", f"{positive_pct:.1f}%")
@@ -558,20 +917,19 @@ if uploaded_file is not None:
         **About sentiment scores:**
         - Scores range from -1 (very negative) to +1 (very positive)
         - 0 is neutral
-        - Uses VADER sentiment analysis, which is great at handling casual text and emojis
         - A score > 0.05 is considered positive, < -0.05 is negative
         """)
     
     st.markdown("---")
     
-    # Section 4: Word Analysis
-    st.header("📝 Word Analysis")
+    # Section 4: Word & Emoji Analysis
+    st.header("📝 Word & Emoji Analysis")
     
-    tab1, tab2 = st.tabs(["🔍 Track a Word", "🏆 Top Words"])
+    tab1, tab2, tab3 = st.tabs(["🔍 Track a Word", "🏆 Top Words", "😀 Top Emojis"])
     
     with tab1:
         st.markdown("### See how word usage changes over time")
-        st.markdown("Ever wonder when you started saying 'lol' less or 'lmao' more? Now you can find out.")
+        st.markdown("Ever wonder when you started saying '😂' less and '😭' more? Now you can find out!")
         
         col1, col2 = st.columns([1, 3])
         
@@ -640,7 +998,7 @@ if uploaded_file is not None:
                         pd.Grouper(key=date_col, freq=word_freq_options[word_frequency])
                     )['Keyword_Count'].sum()
                     author_total = author_keyword_counts.sum()
-                    total_count += author_total
+                    total_count += author_total;
                     
                     with stat_cols[idx]:
                         st.metric(f"{author}'s uses", int(author_total))
@@ -788,9 +1146,125 @@ if uploaded_file is not None:
                 else:
                     st.info("No words found in this date range.")
     
+    with tab3:
+        st.markdown("### Most used emojis in your conversations")
+        st.markdown("See which emojis you and your friends use the most! 😊")
+        
+        import string
+        from collections import Counter
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.markdown("#### Filters")
+            min_date_emoji = data[date_col].min().date()
+            max_date_emoji = data[date_col].max().date()
+            
+            date_range_emoji = st.date_input(
+                "Date range",
+                value=(min_date_emoji, max_date_emoji),
+                min_value=min_date_emoji,
+                max_value=max_date_emoji,
+                key="emoji_date_range"
+            )
+            
+            if len(date_range_emoji) == 2:
+                start_date_emoji, end_date_emoji = date_range_emoji
+            else:
+                start_date_emoji = date_range_emoji[0]
+                end_date_emoji = max_date_emoji
+            
+            # User filter
+            user_filter_emoji_options = ["Everyone"] + selected_authors
+            user_filter_emoji = st.radio(
+                "Whose emojis?",
+                user_filter_emoji_options,
+                key="user_filter_emoji"
+            )
+            
+            n_emojis = st.slider("How many emojis?", min_value=5, max_value=50, value=10, step=5, key="n_emojis")
+        
+        with col2:
+            filtered_data_emoji = data[
+                (data[date_col].dt.date >= start_date_emoji) & 
+                (data[date_col].dt.date <= end_date_emoji)
+            ]
+            
+            if user_filter_emoji != "Everyone":
+                filtered_data_emoji = filtered_data_emoji[filtered_data_emoji[author_col] == user_filter_emoji]
+            
+            # Function to extract emojis from text
+            def extract_emojis(text):
+                if pd.isna(text):
+                    return []
+                emoji_pattern = re.compile(
+                    "["
+                    "\U0001F600-\U0001F64F"  # emoticons
+                    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+                    "\U0001F680-\U0001F6FF"  # transport & map symbols
+                    "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                    "\U00002702-\U000027B0"
+                    "\U000024C2-\U0001F251"
+                    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+                    "\U0001FA00-\U0001FA6F"  # Chess Symbols
+                    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+                    "\U00002600-\U000026FF"  # Miscellaneous Symbols
+                    "\U00002700-\U000027BF"  # Dingbats
+                    "]+", 
+                    flags=re.UNICODE
+                )
+                return emoji_pattern.findall(str(text))
+            
+            all_emojis = []
+            for text in filtered_data_emoji[content_col].dropna():
+                all_emojis.extend(extract_emojis(text))
+            
+            emoji_counts = Counter(all_emojis)
+            top_emojis = emoji_counts.most_common(n_emojis)
+            
+            if top_emojis:
+                emojis_list = [emoji for emoji, count in top_emojis]
+                counts_list = [count for emoji, count in top_emojis]
+                
+                fig_top_emojis = go.Figure(data=[
+                    go.Bar(
+                        x=counts_list,
+                        y=emojis_list,
+                        orientation='h',
+                        marker=dict(
+                            color=counts_list,
+                            colorscale='Plasma',
+                            showscale=True,
+                            colorbar=dict(title="Count")
+                        ),
+                        text=counts_list,
+                        textposition='auto',
+                    )
+                ])
+                
+                fig_top_emojis.update_layout(
+                    title=f'Top {n_emojis} Emojis',
+                    xaxis_title='Count',
+                    yaxis_title='Emoji',
+                    height=max(400, n_emojis * 30),
+                    template='plotly_white',
+                    yaxis=dict(autorange="reversed", tickfont=dict(size=20))
+                )
+                
+                st.plotly_chart(fig_top_emojis, use_container_width=True)
+                
+                with st.expander("📊 See the full list"):
+                    emoji_df = pd.DataFrame(top_emojis, columns=['Emoji', 'Count'])
+                    emoji_df.index = emoji_df.index + 1
+                    emoji_df.index.name = 'Rank'
+                    st.dataframe(emoji_df, use_container_width=True)
+            else:
+                st.info("No emojis found in this date range.")
+    
+    st.markdown("---")
+    
     # Section 5: OpenAI Summaries (only if API key provided)
     if api_key_input:
-        st.markdown("---")
         st.header("🤖 Daily Summaries")
         st.markdown("Get an AI-generated summary of any day's conversation. Great for remembering what you talked about months or years ago.")
         
@@ -849,9 +1323,8 @@ if uploaded_file is not None:
                         
                         conversation_text = "\n".join(conversation_messages)
                         
-                        # Build prompt based on style
+                        # Build prompt based on summary style
                         participant_names = " and ".join(selected_authors)
-                        
                         if summary_style == "Detailed":
                             prompt = f"""This is a day's conversation between {participant_names} on {selected_date}. 
 
@@ -970,16 +1443,16 @@ else:
     st.markdown("""
     ## What this does
     
-    This tool helps you analyze conversation history from any messaging platform. I originally built it to look at 6 years 
-    of Discord messages with my best friend, but it works with any CSV or JSON export.
+    This tool helps you analyze conversation history from any messaging platform. I originally built it to look at imported Discord chats, but it works with any CSV or JSON export.
     
     ## Features
     
     - 📈 **Message trends** - See how active your conversation has been over time
     - 🥧 **Who talks more** - Compare message counts between people (no judgment)
-    - 😊 **Sentiment analysis** - Visualize conversation vibes with calendars and trend charts
+    - 😊 **Sentiment analysis** - Visualize conversation sentiment with calendars and trend charts
     - 🔍 **Word tracking** - Find out when you started/stopped using certain words
     - 🏆 **Top words** - See what you talk about most
+    - 😀 **Top emojis** - Discover your most-used emojis
     - 🤖 **AI summaries** - Get daily summaries of your conversations (requires OpenAI API key)
     
     ## How to use it
@@ -988,7 +1461,7 @@ else:
     2. Upload the file using the sidebar
     3. Tell the app which columns have dates, usernames, and messages
     4. Explore the visualizations
-    5. (Optional) Add an OpenAI API key to unlock AI-powered summaries
+    5. (Optional) Add an OpenAI API key to unlock day summaries
     
     ## File format
     
@@ -997,14 +1470,23 @@ else:
     - An author/username column  
     - A message content column
     
-    Example CSV:
-    ```
-    Date,Author,Content
-    2020-01-01 10:30:00,alice,hey!
-    2020-01-01 10:31:00,bob,what's up
-    ```
+    ## Accessing Chat CSVs/JSONs
+
+    ### iMessage
+    Export your chat history as a txt file using a third-party tool like [imessage-exporter](https://github.com/reagentx/imessage-exporter). 
+
+    ### Instagram
+    1. Go to Instagram Settings → Account Center → Your information and permissions → Download your information
+    2. Request a download of your Messages in JSON format
+    3. Wait for Instagram to prepare your download (usually takes a few hours to a day)
+    4. Download and extract the ZIP file
+    5. Find the conversation you want in `your_activity_across_facebook/messages/inbox/`
+    6. Upload the json file (or similar) to this app
+                    
+    ### Discord
+    Export your server or DM history using a third-party tool like [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter). Export as CSV for best results. Keep in mind exporting using a tool like this may go against Discord ToS, so use at your own risk.
     
     ## Tech used
     
-    Built with pandas, plotly, NLTK, scikit-learn, and OpenAI's API. Made as a personal project to learn data science tools.
+    Built with pandas, plotly, NLTK, scikit-learn, and OpenAI's API. Originally made as a personal project to analyze my own 500K word conversation history with my best friend and learn data science tools along the way :P
     """)
