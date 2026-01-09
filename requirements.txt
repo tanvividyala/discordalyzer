@@ -4,3 +4,6 @@ nltk
 openai
 wordcloud
 scikit-learn
+plotly
+plotly.graph_objects
+streamlit
