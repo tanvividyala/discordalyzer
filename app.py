@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import json
-import re  # Add this import for the iMessage TXT parser
+import re  
 
 # Page configuration
 st.set_page_config(
@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("💬 Conversation Analyzer")
-st.markdown("A tool to analyze your conversation history and visualize trends over time. Works with any CSV or JSON export from messaging platforms!")
+st.markdown("This is a personal project I created to analyze my best friend and I's text conversation history over the past 7 years and get the hang of basic data science tools. A tool to analyze your conversation history and visualize trends over time. Works with CSV, JSON, and TXT exports from messaging platforms such as Instagram, iMessage, Discord, and Google Chat. ")
 
 # Sidebar setup
 st.sidebar.header("📁 Upload Your Data")
