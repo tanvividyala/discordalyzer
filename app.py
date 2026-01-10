@@ -1366,17 +1366,12 @@ Conversation:
                                 )
                                 
                                 summary = response.choices[0].message.content
-                                
-                                st.markdown("### 📝 Summary")
-                                st.markdown(f"**Date:** {selected_date} | **Messages:** {len(filter_data)} | **Model:** {model_choice}")
-                                st.markdown("---")
-                                
-                                st.markdown(
-                                    f"""<div style='background-color: rgba(114, 137, 218, 0.1); padding: 20px; border-radius: 10px; border-left: 4px solid #7289DA;'>
-                                    {summary}
-                                    </div>""",
-                                    unsafe_allow_html=True
-                                )
+
+                                # Formatting the summary
+                                formatted_summary = "\n\n".join([f"**{section.strip()}**" for section in summary.split('-') if section.strip()])
+
+                                st.markdown("### 📝 Highlights")
+                                st.markdown(formatted_summary)
                                 
                                 if hasattr(response, 'usage'):
                                     with st.expander("📊 Token usage"):
