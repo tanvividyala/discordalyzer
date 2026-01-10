@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("💬 Conversation Analyzer")
-st.markdown("This is a personal project I created to analyze my best friend and I's text conversation history over the past 7 years and get the hang of basic data science tools. A tool to analyze your conversation history and visualize trends over time. Works with CSV, JSON, and TXT exports from messaging platforms such as Instagram, iMessage, Discord, and Google Chat. ")
+st.markdown("This is a personal project I created to analyze my best friend and I's text conversation history over the past 7 years and get the hang of basic data science tools. Use it to analyze your conversation history and visualize trends over time. Works with CSV, JSON, and TXT exports from messaging platforms such as Instagram, iMessage, Discord, and Google Chat. ")
 
 # Sidebar setup
 st.sidebar.header("📁 Upload Your Data")
@@ -1266,7 +1266,7 @@ if uploaded_file is not None:
     # Section 5: OpenAI Summaries (only if API key provided)
     if api_key_input:
         st.header("🤖 Daily Summaries")
-        st.markdown("Get an AI-generated summary of any day's conversation. Great for remembering what you talked about months or years ago.")
+        st.markdown("Get an summary of any day's conversation. Great for remembering what you talked about months or years ago.")
         
         try:
             from openai import OpenAI
@@ -1483,5 +1483,5 @@ else:
     
     ## Tech used
     
-    Built with pandas, plotly, NLTK, scikit-learn, and OpenAI's API. Originally made as a personal project to analyze my own 500K word conversation history with my best friend and learn data science tools along the way :P
+    Built with streamlit, pandas, plotly, NLTK, VADER, and OpenAI's API.
     """)
