@@ -1,9 +1,6 @@
 # Convolyzer: Message History Analysis & Visualization Tool
 
-<p align="center" width="100%">
-<video src="https://www.youtube.com/embed/jQuLD7CuNTA?si=3jTVYKsfFKSjDEM7" width="80%" controls></video>
-</p>
-
+[![Watch the video](https://img.youtube.com/vi/jQuLD7CuNTA/0.jpg)](https://www.youtube.com/watch?v=udggbA-BiDE)
 
 This is a personal project I created to analyze my best friend and I's conversation history over the past 7 years and get the hang of basic data science tools. I used pandas to clean my data and find trends, plotly to visualize trends, NTLK to tokenize and preprocess text, and scikit-learn (K-Means, TF-idf) to get started with clustering similar messages. Then, I used Streamlit to build and deploy a functional web app so you can do it too!
 
