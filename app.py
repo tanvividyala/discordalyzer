@@ -8,12 +8,12 @@ import re
 
 # Page configuration
 st.set_page_config(
-    page_title="Conversation Analyzer",
+    page_title="Convolyzer",
     page_icon="💬",
     layout="wide"
 )
 
-st.title("💬 Conversation Analyzer")
+st.title("💬 Convolyzer: Message History Analysis & Visualization Tool")
 st.markdown("This is a personal project I created to analyze my best friend and I's text conversation history over the past 7 years and get the hang of basic data science tools. Use it to analyze your conversation history and visualize trends over time. Works with CSV, JSON, and TXT exports from messaging platforms such as Instagram, iMessage, Discord, and Google Chat. ")
 
 # Sidebar setup
