@@ -16,7 +16,7 @@ This is a personal project I created to analyze my best friend and I's conversat
 - Tool to cluster messages with similar themes.
 
 ## Web App
-Access the Web App [Here](https://convolyzer.streamlit.app/).
+Access the Web App [Here](https://convolyzer.streamlit.app/). Feel free to use `sample_conversation_data.csv` to explore the tool.
 
 ## Usage Instructions for Jupyter Notebook
 1. **Clone the Repository**:
